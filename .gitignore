@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+env/
+venv/
+ENV/
+dist/
+build/
+*.egg-info/
+.vscode/
+.idea/
+gesture_action_mappings.json
+.DS_Store
