@@ -1,0 +1,13 @@
+{
+  "pinch": "left_click",
+  "double_pinch": "right_click",
+  "fist": "do_nothing",
+  "palm_open": "do_nothing",
+  "two_fingers": "scroll_down",
+  "swipe_left": "do_nothing",
+  "swipe_right": "do_nothing",
+  "swipe_up": "do_nothing",
+  "swipe_down": "do_nothing",
+  "thumbs_up": "do_nothing",
+  "thumbs_down": "do_nothing"
+}
