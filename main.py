@@ -176,18 +176,14 @@ class GestureDetectionWorker(QObject):
                                 metadata
                             )
 
-                            # Handle gesture (mouse/keyboard control) - only if ACTIVE
-                            # Skip fist activation toggle (handled internally)
-                            if self.gesture_recognizer.is_active and gesture_type != GestureType.FIST:
-                                self._handle_gesture(gesture_type, metadata)
+                            # Handle gesture (mouse/keyboard control)
+                            self._handle_gesture(gesture_type, metadata)
 
-                        # Move cursor - only if ACTIVE and not in FIST/TWO_FINGERS (freeze/scroll modes)
-                        if self.gesture_recognizer.is_active and gesture_type not in (GestureType.RELEASE, GestureType.FIST, GestureType.TWO_FINGERS):
-                            screen_w, screen_h = self.system_controller.screen_width, self.system_controller.screen_height
-                            # Proper calibration: scale hand frame to screen resolution
-                            target_x = (screen_w / self.hand_tracker.frame_width) * index_pos[0]
-                            target_y = (screen_h / self.hand_tracker.frame_height) * index_pos[1]
-                            self.cursor_smoother.move_to(target_x, target_y)
+                        # Move cursor
+                        screen_w, screen_h = self.system_controller.screen_width, self.system_controller.screen_height
+                        target_x = (screen_w / self.hand_tracker.frame_width) * index_pos[0]
+                        target_y = (screen_h / self.hand_tracker.frame_height) * index_pos[1]
+                        self.cursor_smoother.move_to(target_x, target_y)
 
                 # Add background bar for text readability
                 cv2.rectangle(frame_with_landmarks, (0, 0), (640, 95), (0, 0, 0), -1)
@@ -207,7 +203,7 @@ class GestureDetectionWorker(QObject):
                 # Add instructions
                 cv2.putText(
                     frame_with_landmarks,
-                    "Pinch: Left Click | Double Pinch: Right Click | Move hand to move cursor",
+                    "Pinch: Left Click | Move hand to move cursor",
                     (10, 50),
                     cv2.FONT_HERSHEY_SIMPLEX,
                     0.45,
@@ -252,26 +248,6 @@ class GestureDetectionWorker(QObject):
                         (200, 200, 200),
                         1
                     )
-                
-                # Add activation status indicator
-                status_color = (0, 255, 0) if self.gesture_recognizer.is_active else (255, 0, 0)
-                status_text = "✓ ACTIVE" if self.gesture_recognizer.is_active else "✗ PAUSED"
-                cv2.rectangle(
-                    frame_with_landmarks,
-                    (400, 80),
-                    (630, 100),
-                    status_color,
-                    -1
-                )
-                cv2.putText(
-                    frame_with_landmarks,
-                    status_text,
-                    (410, 95),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.5,
-                    (0, 0, 0) if self.gesture_recognizer.is_active else (255, 255, 255),
-                    1
-                )
 
                 # Convert frame for Qt display
                 qt_image = self._convert_cv_to_qt(frame_with_landmarks)
@@ -344,11 +320,6 @@ class GestureControlGUI(QMainWindow):
         self.worker.frame_ready.connect(self._on_frame_ready)
         self.worker.status_changed.connect(self._on_status_changed)
         self.worker.gesture_detected.connect(self._on_gesture_detected)
-        
-        # Timer to update activation status
-        self.activation_timer = QTimer()
-        self.activation_timer.timeout.connect(self._update_activation_status)
-        self.activation_timer.start(100)  # Update every 100ms
 
         # Initialize UI
         self._init_ui()
@@ -392,11 +363,6 @@ class GestureControlGUI(QMainWindow):
         self.gesture_label = QLabel("Last Gesture: None")
         self.gesture_label.setStyleSheet("color: #333; font-size: 10pt;")
         right_layout.addWidget(self.gesture_label)
-        
-        # Activation status
-        self.activation_label = QLabel("System: ✓ ACTIVE")
-        self.activation_label.setStyleSheet("color: green; font-weight: bold; font-size: 11pt;")
-        right_layout.addWidget(self.activation_label)
 
         right_layout.addSpacing(20)
 
@@ -529,15 +495,6 @@ class GestureControlGUI(QMainWindow):
         color = "green" if "Running" in status else "red"
         self.status_label.setText(f"Status: {status}")
         self.status_label.setStyleSheet(f"color: {color}; font-weight: bold; font-size: 12pt;")
-    
-    def _update_activation_status(self):
-        """Update activation status display from worker."""
-        if self.worker and hasattr(self.worker, 'gesture_recognizer') and self.worker.gesture_recognizer:
-            is_active = self.worker.gesture_recognizer.is_active
-            status_text = "✓ ACTIVE" if is_active else "✗ PAUSED"
-            color = "green" if is_active else "red"
-            self.activation_label.setText(f"System: {status_text}")
-            self.activation_label.setStyleSheet(f"color: {color}; font-weight: bold; font-size: 11pt;")
 
     def _on_gesture_detected(self, gesture_type, metadata):
         """Update gesture indicator."""
@@ -552,8 +509,6 @@ class GestureControlGUI(QMainWindow):
 
     def closeEvent(self, event):
         """Handle window close."""
-        if self.activation_timer:
-            self.activation_timer.stop()
         if self.worker:
             self.worker.stop()
         event.accept()

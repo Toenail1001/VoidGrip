@@ -6,8 +6,8 @@
   "two_fingers": "scroll_down",
   "swipe_left": "do_nothing",
   "swipe_right": "do_nothing",
-  "swipe_up": "do_nothing",
-  "swipe_down": "do_nothing",
-  "thumbs_up": "do_nothing",
-  "thumbs_down": "do_nothing"
+  "swipe_up": "maximize_window",
+  "swipe_down": "minimize_window",
+  "thumbs_up": "volume_up",
+  "thumbs_down": "volume_down"
 }

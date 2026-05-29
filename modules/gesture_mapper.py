@@ -16,19 +16,7 @@ class GestureMapper:
 
     # Default gesture mappings (provided at first run)
     DEFAULT_MAPPINGS = {
-        # Core gestures - high quality, reliable
         "pinch": "left_click",
-        "double_pinch": "right_click",
-        "fist": "do_nothing",  # Reserved for activation toggle (hold 0.5s to pause/resume)
-        "palm_open": "do_nothing",  # Previously used for activation, now available for other uses
-        "two_fingers": "do_nothing",  # Scroll mode - special handling in worker
-        # Deprecated/disabled by default - low quality
-        "swipe_left": "do_nothing",
-        "swipe_right": "do_nothing",
-        "swipe_up": "do_nothing",
-        "swipe_down": "do_nothing",
-        "thumbs_up": "do_nothing",
-        "thumbs_down": "do_nothing",
     }
 
     def __init__(self, mappings_file="gesture_action_mappings.json"):
