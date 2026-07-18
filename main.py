@@ -414,7 +414,7 @@ class GestureControlGUI(QMainWindow):
 
         # Failsafe info
         if DISPLAY_FAILSAFE_INFO:
-            failsafe_label = QLabel("🥵 Failsafe: Move to top-left corner to stop")
+            failsafe_label = QLabel("💡 Failsafe: Move to top-left corner to stop")
             failsafe_label.setStyleSheet("color: #FF9800; font-size: 10pt;")
             right_layout.addWidget(failsafe_label)
 
@@ -425,7 +425,10 @@ class GestureControlGUI(QMainWindow):
         info_text = ("Supported Gestures:\n"
                      "• Point → Move cursor\n"
                      "• Pinch → Configured action\n"
-                     
+                     "• Double pinch → Configured action\n"
+                     "• Swipe up/down/left/right\n"
+                     "• Palm open\n"
+                     "• Thumbs up/down\n\n"
                      "Click 'Configure Gestures' to customize actions!")
         info_label = QLabel(info_text)
         info_label.setStyleSheet("color: #666; font-size: 9pt; background-color: #f5f5f5; padding: 10px; border-radius: 5px;")
