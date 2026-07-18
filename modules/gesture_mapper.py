@@ -17,6 +17,16 @@ class GestureMapper:
     # Default gesture mappings (provided at first run)
     DEFAULT_MAPPINGS = {
         "pinch": "left_click",
+        "double_pinch": "screenshot",
+        "fist": "switch_application",
+        "palm_open": "show_desktop",
+        "two_fingers": "media_play_pause",
+        "swipe_left": "switch_application",
+        "swipe_right": "switch_application_reverse",
+        "swipe_up": "maximize_window",
+        "swipe_down": "minimize_window",
+        "thumbs_up": "volume_up",
+        "thumbs_down": "volume_down",
     }
 
     def __init__(self, mappings_file="gesture_action_mappings.json"):
