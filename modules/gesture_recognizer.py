@@ -16,7 +16,10 @@ class GestureType(Enum):
 
     NONE = "none"
     PINCH = "pinch"
-
+    THUMBS_UP = "thumbs_up"
+    THUMBS_DOWN = "thumbs_down"
+    OPEN_PALM = "open_palm"
+    FIST = "fist"
 
 class GestureRecognizer:
     """
@@ -69,7 +72,29 @@ class GestureRecognizer:
 
         dist = self.distance(thumb_pos, index_pos)
         return dist < PINCH_DISTANCE_THRESHOLD
+    
+    def is_open_palm(self, landmarks):
+        #Get fingertip positions
+        thumb = self.hand_tracker.get_landmark_position(landmarks, 4)
+        index = self.hand_tracker.get_landmark_position(landmarks, 8)
+        middle = self.hand_tracker.get_landmark_position(landmarks, 12)
+        ring = self.hand_tracker.get_landmark_position(landmarks, 16)
+        pinky = self.hand_tracker.get_landmark_position(landmarks, 20)
 
+        #Get the finger joints
+        index_joint = self.hand_tracker.get_landmark_position(landmarks, 6)
+        middle_joint = self.hand_tracker.get_landmark_position(landmarks, 10)
+        ring_joint = self.hand_tracker.get_landmark_position(landmarks, 14)
+        pinky_joint = self.hand_tracker.get_landmark_position(landmarks, 18)
+
+        #Check whether each finger is extended
+        index_up = index[1] < index_joint[1]
+        middle_up = middle[1] < middle_joint[1]
+        ring_up = ring[1] < ring_joint[1]
+        pinky_up = pinky[1] < pinky_joint[1]
+
+        return index_up and middle_up and ring_up and pinky_up
+    
     def get_gesture(self, landmarks):
         """
         Recognize gesture from hand landmarks.
@@ -100,6 +125,9 @@ class GestureRecognizer:
             # Transition from pinching to not pinching (release)
             self.is_pinching = False
 
+        if self.is_open_palm(landmarks):
+            return GestureType.OPEN_PALM, {"position": index_pos}
+        
         # Default: return cursor position for movement
         return GestureType.NONE, {"position": index_pos}
 
