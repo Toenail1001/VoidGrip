@@ -105,10 +105,14 @@ class GestureDetectionWorker(QObject):
 
                 # Handle detected hands
                 if results.multi_hand_landmarks:
-                    for hand_landmarks in results.multi_hand_landmarks:
+                    for i, hand_landmarks in enumerate(results.multi_hand_landmarks):
+                        # Gets whether the hand is Left or Right
+                        hand_label = results.multi_handedness[i].classification[0].label
+
                         # Recognize gesture
                         gesture_type, metadata = self.gesture_recognizer.get_gesture(
-                            hand_landmarks
+                            hand_landmarks,
+                            hand_label
                         )
 
                         # Get hand measurements for visualization

@@ -1,7 +1,7 @@
 """Gesture Recognizer - Detects gestures from hand landmarks.
 Supports: Pinch for left click and cursor control.
 """
-
+import time
 import math
 from enum import Enum
 from operator import index
@@ -11,6 +11,13 @@ from config import (
     LANDMARK_INDEX_TIP,
 )
 
+# Gesture detection thresholds
+THUMB_EXTENSION_THRESHOLD = 20
+PINCH_THRESHOLD = PINCH_DISTANCE_THRESHOLD
+GESTURE_CONFIRM_FRAMES = 6
+# Gesture thresholds
+FINGER_EXTENSION_MARGIN = 20
+THUMB_EXTENSION_MARGIN = 18
 
 class GestureType(Enum):
     """Enumeration of supported gestures."""
@@ -35,6 +42,9 @@ class GestureRecognizer:
         Args:
             hand_tracker (HandTracker): Hand tracker instance
         """
+        self.last_gesture_time = 0
+        self.gesture_cooldown = 0.5   # seconds
+
         self.hand_tracker = hand_tracker
 
         # Pinch detection state
@@ -78,10 +88,11 @@ class GestureRecognizer:
         dist = self.distance(thumb_pos, index_pos)
         return dist < PINCH_DISTANCE_THRESHOLD
     
-    def get_finger_states(self, landmarks):
+    def get_finger_states(self, landmarks, hand_label):
         """Returns whether each finger is extended."""
         # Fingertips
         thumb = self.hand_tracker.get_landmark_position(landmarks, 4)
+        wrist = self.hand_tracker.get_landmark_position(landmarks, 0)
         index = self.hand_tracker.get_landmark_position(landmarks, 8)
         middle = self.hand_tracker.get_landmark_position(landmarks, 12)
         ring = self.hand_tracker.get_landmark_position(landmarks, 16)
@@ -89,22 +100,38 @@ class GestureRecognizer:
 
         # Finger joints
         thumb_joint = self.hand_tracker.get_landmark_position(landmarks, 3)
+
+        thumb_base = self.hand_tracker.get_landmark_position(landmarks, 2)
+
         index_joint = self.hand_tracker.get_landmark_position(landmarks, 6)
         middle_joint = self.hand_tracker.get_landmark_position(landmarks, 10)
         ring_joint = self.hand_tracker.get_landmark_position(landmarks, 14)
         pinky_joint = self.hand_tracker.get_landmark_position(landmarks, 18)
 
         # Determine if fingers are extended
-        thumb_up = thumb[1] < thumb_joint[1]
-        index_up = index[1] < index_joint[1]
-        middle_up = middle[1] < middle_joint[1]
-        ring_up = ring[1] < ring_joint[1]
-        pinky_up = pinky[1] < pinky_joint[1]
+        if hand_label == "Right":
+            thumb_extended = (
+                thumb[0] < thumb_joint[0] < thumb_base[0]
+            )
+        else:
+            thumb_extended = (
+                thumb[0] > thumb_joint[0] > thumb_base[0]
+            )
+        index_up = index[1] < (index_joint[1] - FINGER_EXTENSION_MARGIN)
+        middle_up = middle[1] < (middle_joint[1] - FINGER_EXTENSION_MARGIN)
+        ring_up = ring[1] < (ring_joint[1] - FINGER_EXTENSION_MARGIN)
+        pinky_up = pinky[1] < (pinky_joint[1] - FINGER_EXTENSION_MARGIN)
+            
         
-        thumb_direction = "up" if thumb[1] < thumb_joint[1] else "down"
+        if thumb[1] < wrist[1] - THUMB_EXTENSION_MARGIN:
+            thumb_direction = "up"
+        elif thumb[1] > wrist[1] + THUMB_EXTENSION_MARGIN:
+            thumb_direction = "down"
+        else:
+            thumb_direction = "side"
 
         return {
-            "thumb": thumb_up,
+            "thumb": thumb_extended,
             "thumb_direction": thumb_direction,
             "index": index_up,
             "middle": middle_up,
@@ -112,8 +139,8 @@ class GestureRecognizer:
             "pinky": pinky_up
         }
 
-    def is_open_palm(self, landmarks):
-       states = self.get_finger_states(landmarks)
+    def is_open_palm(self, landmarks, hand_label):
+       states = self.get_finger_states(landmarks, hand_label)
        thumb = self.hand_tracker.get_landmark_position(landmarks, 4)
        index = self.hand_tracker.get_landmark_position(landmarks, 8)
        
@@ -128,8 +155,8 @@ class GestureRecognizer:
             thumb_index_distance > PINCH_DISTANCE_THRESHOLD
         )
     
-    def is_fist(self, landmarks):
-        states = self.get_finger_states(landmarks)
+    def is_fist(self, landmarks, hand_label):
+        states = self.get_finger_states(landmarks, hand_label)
 
         return (
             not states["thumb"] and
@@ -139,8 +166,8 @@ class GestureRecognizer:
             not states["pinky"]
         )
     
-    def is_thumbs_up(self, landmarks):
-        states = self.get_finger_states(landmarks)
+    def is_thumbs_up(self, landmarks, hand_label):
+        states = self.get_finger_states(landmarks, hand_label)
 
         return (
             states["thumb"] and
@@ -151,8 +178,8 @@ class GestureRecognizer:
             not states["pinky"]
         )
     
-    def is_thumbs_down(self, landmarks):
-        states = self.get_finger_states(landmarks)
+    def is_thumbs_down(self, landmarks, hand_label):
+        states = self.get_finger_states(landmarks, hand_label)
 
         return (
             states["thumb"] and
@@ -163,7 +190,7 @@ class GestureRecognizer:
             not states["pinky"]
         )
 
-    def get_gesture(self, landmarks):
+    def get_gesture(self, landmarks, hand_label):
         """
         Recognize gesture from hand landmarks.
 
@@ -184,8 +211,7 @@ class GestureRecognizer:
         index_pos = self.hand_tracker.get_landmark_position(
             landmarks, LANDMARK_INDEX_TIP
         )
-        states = self.get_finger_states(landmarks)
-        print(states)
+
         # ============= PINCH DETECTION =============
         if is_pinching_now and not self.is_pinching:
             # Transition from not pinching to pinching (pinch start)
@@ -196,17 +222,19 @@ class GestureRecognizer:
             # Transition from pinching to not pinching (release)
             self.is_pinching = False
 
-        if self.is_thumbs_up(landmarks):
+        # ============= OTHER GESTURES =============
+        if self.is_thumbs_up(landmarks, hand_label):
             gesture = GestureType.THUMBS_UP
         
-        if self.is_thumbs_down(landmarks):
+        elif self.is_thumbs_down(landmarks, hand_label):
             gesture = GestureType.THUMBS_DOWN
         
-        if self.is_open_palm(landmarks):
+        elif self.is_open_palm(landmarks, hand_label):
             gesture = GestureType.OPEN_PALM
         
-        if self.is_fist(landmarks):
+        elif self.is_fist(landmarks, hand_label):
             gesture = GestureType.FIST
+
 
         if gesture == self.previous_gesture:
             self.gesture_frame_count += 1
@@ -214,7 +242,18 @@ class GestureRecognizer:
             self.previous_gesture = gesture
             self.gesture_frame_count = 1
 
+        current_time = time.time()
+
+        if current_time - self.last_gesture_time < self.gesture_cooldown:
+            return GestureType.NONE, {"position": index_pos}
+
+        self.last_gesture_time = current_time
+
         if self.gesture_frame_count >= self.required_frames:
+            current_time = time.time()
+                
+            if current_time - self.last_gesture_time >= self.gesture_cooldown:
+                self.last_gesture_time = current_time
             return gesture, {"position": index_pos}
 
         return GestureType.NONE, {"position": index_pos}
