@@ -207,7 +207,7 @@ class GestureDetectionWorker(QObject):
                 # Add instructions
                 cv2.putText(
                     frame_with_landmarks,
-                    "Pinch: Left Click | Move hand to move cursor",
+                    "Pinch: Click | Peace Sign: Scroll | Move hand: Cursor",
                     (10, 50),
                     cv2.FONT_HERSHEY_SIMPLEX,
                     0.45,
