@@ -28,6 +28,7 @@ class GestureType(Enum):
     THUMBS_DOWN = "thumbs_down"
     OPEN_PALM = "open_palm"
     FIST = "fist"
+    PEACE_SIGN = "peace_sign"
 
 class GestureRecognizer:
     """
@@ -190,6 +191,36 @@ class GestureRecognizer:
             not states["pinky"]
         )
 
+    def is_peace_sign(self, landmarks, hand_label):
+        """
+        Detect peace sign gesture (✌️).
+        Index and middle fingers extended, ring/pinky/thumb folded.
+        Spread check ensures the two fingers are visibly separated
+        (prevents confusion with cursor pointing or pinch states).
+        """
+        states = self.get_finger_states(landmarks, hand_label)
+
+        # Primary condition: only index and middle are up
+        fingers_correct = (
+            states["index"] and
+            states["middle"] and
+            not states["ring"] and
+            not states["pinky"] and
+            not states["thumb"]
+        )
+
+        if not fingers_correct:
+            return False
+
+        # Spread check: index and middle tips should be visibly apart
+        # (prevents false positives when fingers are pressed together)
+        index_tip = self.hand_tracker.get_landmark_position(landmarks, 8)
+        middle_tip = self.hand_tracker.get_landmark_position(landmarks, 12)
+        spread = self.distance(index_tip, middle_tip)
+
+        # Must be spread apart by at least 15px (finger-width separation)
+        return spread > 15
+
     def get_gesture(self, landmarks, hand_label):
         """
         Recognize gesture from hand landmarks.
@@ -228,6 +259,9 @@ class GestureRecognizer:
         
         elif self.is_thumbs_down(landmarks, hand_label):
             gesture = GestureType.THUMBS_DOWN
+
+        elif self.is_peace_sign(landmarks, hand_label):
+            gesture = GestureType.PEACE_SIGN
         
         elif self.is_open_palm(landmarks, hand_label):
             gesture = GestureType.OPEN_PALM

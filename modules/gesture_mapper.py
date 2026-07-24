@@ -17,6 +17,7 @@ class GestureMapper:
     # Default gesture mappings (provided at first run)
     DEFAULT_MAPPINGS = {
         "pinch": "left_click",
+        "peace_sign": "do_nothing",
     }
 
     def __init__(self, mappings_file="gesture_action_mappings.json"):
