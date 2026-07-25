@@ -207,10 +207,10 @@ class GestureDetectionWorker(QObject):
                 # Add instructions
                 cv2.putText(
                     frame_with_landmarks,
-                    "Pinch: Click | Peace Sign: Scroll | Move hand: Cursor",
+                    "Pinch: Click/Drag | Vol +/-: Thumbs Up/Down | Move hand: Cursor",
                     (10, 50),
                     cv2.FONT_HERSHEY_SIMPLEX,
-                    0.45,
+                    0.42,
                     (200, 200, 200),
                     1
                 )
@@ -272,6 +272,14 @@ class GestureDetectionWorker(QObject):
             gesture_type (GestureType): Type of gesture detected
             metadata (dict): Gesture metadata
         """
+        if gesture_type == GestureType.PINCH:
+            event = metadata.get("event")
+            if event == "start":
+                self.action_controller.mouse_down()
+            elif event == "release":
+                self.action_controller.mouse_up()
+            return
+
         # Get gesture name from enum
         gesture_name = gesture_type.value
         

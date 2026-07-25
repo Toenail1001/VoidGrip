@@ -26,6 +26,7 @@ class GestureType(Enum):
     PINCH = "pinch"
     THUMBS_UP = "thumbs_up"
     THUMBS_DOWN = "thumbs_down"
+    THREE_FINGERS = "three_fingers"
     OPEN_PALM = "open_palm"
     FIST = "fist"
     PEACE_SIGN = "peace_sign"
@@ -92,38 +93,27 @@ class GestureRecognizer:
     def get_finger_states(self, landmarks, hand_label):
         """Returns whether each finger is extended."""
         # Fingertips
-        thumb = self.hand_tracker.get_landmark_position(landmarks, 4)
         wrist = self.hand_tracker.get_landmark_position(landmarks, 0)
+        thumb = self.hand_tracker.get_landmark_position(landmarks, 4)
         index = self.hand_tracker.get_landmark_position(landmarks, 8)
         middle = self.hand_tracker.get_landmark_position(landmarks, 12)
         ring = self.hand_tracker.get_landmark_position(landmarks, 16)
         pinky = self.hand_tracker.get_landmark_position(landmarks, 20)
 
-        # Finger joints
-        thumb_joint = self.hand_tracker.get_landmark_position(landmarks, 3)
-
+        # Finger joints (PIP joints: 6, 10, 14, 18)
         thumb_base = self.hand_tracker.get_landmark_position(landmarks, 2)
-
         index_joint = self.hand_tracker.get_landmark_position(landmarks, 6)
         middle_joint = self.hand_tracker.get_landmark_position(landmarks, 10)
         ring_joint = self.hand_tracker.get_landmark_position(landmarks, 14)
         pinky_joint = self.hand_tracker.get_landmark_position(landmarks, 18)
 
-        # Determine if fingers are extended
-        if hand_label == "Right":
-            thumb_extended = (
-                thumb[0] < thumb_joint[0] < thumb_base[0]
-            )
-        else:
-            thumb_extended = (
-                thumb[0] > thumb_joint[0] > thumb_base[0]
-            )
-        index_up = index[1] < (index_joint[1] - FINGER_EXTENSION_MARGIN)
-        middle_up = middle[1] < (middle_joint[1] - FINGER_EXTENSION_MARGIN)
-        ring_up = ring[1] < (ring_joint[1] - FINGER_EXTENSION_MARGIN)
-        pinky_up = pinky[1] < (pinky_joint[1] - FINGER_EXTENSION_MARGIN)
-            
-        
+        # Orientation-invariant finger extension check (distance from wrist to tip vs PIP joint)
+        thumb_extended = self.distance(wrist, thumb) > (self.distance(wrist, thumb_base) + 15)
+        index_up = self.distance(wrist, index) > (self.distance(wrist, index_joint) + 10)
+        middle_up = self.distance(wrist, middle) > (self.distance(wrist, middle_joint) + 10)
+        ring_up = self.distance(wrist, ring) > (self.distance(wrist, ring_joint) + 10)
+        pinky_up = self.distance(wrist, pinky) > (self.distance(wrist, pinky_joint) + 10)
+
         if thumb[1] < wrist[1] - THUMB_EXTENSION_MARGIN:
             thumb_direction = "up"
         elif thumb[1] > wrist[1] + THUMB_EXTENSION_MARGIN:
@@ -171,7 +161,6 @@ class GestureRecognizer:
         states = self.get_finger_states(landmarks, hand_label)
 
         return (
-            states["thumb"] and
             states["thumb_direction"] == "up" and
             not states["index"] and
             not states["middle"] and
@@ -183,7 +172,6 @@ class GestureRecognizer:
         states = self.get_finger_states(landmarks, hand_label)
 
         return (
-            states["thumb"] and
             states["thumb_direction"] == "down" and
             not states["index"] and
             not states["middle"] and
@@ -200,13 +188,12 @@ class GestureRecognizer:
         """
         states = self.get_finger_states(landmarks, hand_label)
 
-        # Primary condition: only index and middle are up
+        # Primary condition: index and middle are up, ring and pinky folded
         fingers_correct = (
             states["index"] and
             states["middle"] and
             not states["ring"] and
-            not states["pinky"] and
-            not states["thumb"]
+            not states["pinky"]
         )
 
         if not fingers_correct:
@@ -220,6 +207,20 @@ class GestureRecognizer:
 
         # Must be spread apart by at least 15px (finger-width separation)
         return spread > 15
+
+    def is_three_fingers(self, landmarks, hand_label):
+        """
+        Detect three fingers gesture (index, middle, and ring extended; pinky folded).
+        Relaxed thumb constraint allows comfortable positioning (e.g. thumb holding pinky down).
+        """
+        states = self.get_finger_states(landmarks, hand_label)
+
+        return (
+            states["index"] and
+            states["middle"] and
+            states["ring"] and
+            not states["pinky"]
+        )
 
     def get_gesture(self, landmarks, hand_label):
         """
@@ -247,11 +248,12 @@ class GestureRecognizer:
         if is_pinching_now and not self.is_pinching:
             # Transition from not pinching to pinching (pinch start)
             self.is_pinching = True
-            return GestureType.PINCH, {"position": index_pos}
+            return GestureType.PINCH, {"event": "start", "position": index_pos}
 
         elif not is_pinching_now and self.is_pinching:
             # Transition from pinching to not pinching (release)
             self.is_pinching = False
+            return GestureType.PINCH, {"event": "release", "position": index_pos}
 
         # ============= OTHER GESTURES =============
         if self.is_thumbs_up(landmarks, hand_label):
@@ -259,6 +261,9 @@ class GestureRecognizer:
         
         elif self.is_thumbs_down(landmarks, hand_label):
             gesture = GestureType.THUMBS_DOWN
+
+        elif self.is_three_fingers(landmarks, hand_label):
+            gesture = GestureType.THREE_FINGERS
 
         elif self.is_peace_sign(landmarks, hand_label):
             gesture = GestureType.PEACE_SIGN
@@ -278,17 +283,11 @@ class GestureRecognizer:
 
         current_time = time.time()
 
-        if current_time - self.last_gesture_time < self.gesture_cooldown:
-            return GestureType.NONE, {"position": index_pos}
-
-        self.last_gesture_time = current_time
-
-        if self.gesture_frame_count >= self.required_frames:
-            current_time = time.time()
-                
+        if gesture != GestureType.NONE and self.gesture_frame_count >= self.required_frames:
             if current_time - self.last_gesture_time >= self.gesture_cooldown:
                 self.last_gesture_time = current_time
-            return gesture, {"position": index_pos}
+                self.gesture_frame_count = 0
+                return gesture, {"position": index_pos}
 
         return GestureType.NONE, {"position": index_pos}
 

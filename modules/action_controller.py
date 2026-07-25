@@ -32,6 +32,24 @@ class ActionController:
 
     # ============= MOUSE ACTIONS =============
 
+    def mouse_down(self):
+        """Press and hold left mouse button for dragging."""
+        try:
+            import ctypes
+            ctypes.windll.user32.mouse_event(0x0002, 0, 0, 0, 0)
+        except Exception:
+            pyautogui.mouseDown()
+        return True
+
+    def mouse_up(self):
+        """Release left mouse button after dragging."""
+        try:
+            import ctypes
+            ctypes.windll.user32.mouse_event(0x0004, 0, 0, 0, 0)
+        except Exception:
+            pyautogui.mouseUp()
+        return True
+
     def left_click(self):
         """Perform left mouse click."""
         pyautogui.click()
@@ -180,7 +198,16 @@ class ActionController:
         return True
 
     def screenshot(self):
-        """Take screenshot (Windows key + Print Screen)."""
+        """Take instant full-screen screenshot."""
+        try:
+            pyautogui.hotkey('win', 'printscreen')
+            pyautogui.press('printscreen')
+        except Exception as e:
+            pyautogui.press('printscreen')
+        return True
+
+    def screenshot_region(self):
+        """Open Windows Snipping Tool for region capture."""
         pyautogui.hotkey('win', 'shift', 's')
         return True
 
@@ -302,6 +329,7 @@ class ActionController:
             'select_all': self.select_all,
             'save': self.save,
             'screenshot': self.screenshot,
+            'screenshot_region': self.screenshot_region,
 
             # Utility
             'do_nothing': self.do_nothing,
@@ -359,6 +387,7 @@ class ActionController:
             'select_all',
             'save',
             'screenshot',
+            'screenshot_region',
             'do_nothing',
             'open_start_menu',
             'open_run_dialog',
@@ -403,7 +432,8 @@ class ActionController:
             'cut': 'Cut',
             'select_all': 'Select All',
             'save': 'Save',
-            'screenshot': 'Take Screenshot',
+            'screenshot': 'Take Full Screenshot',
+            'screenshot_region': 'Snip Region (Snipping Tool)',
             'do_nothing': '(No Action)',
             'open_start_menu': 'Open Start Menu',
             'open_run_dialog': 'Open Run Dialog',
