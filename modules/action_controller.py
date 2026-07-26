@@ -5,9 +5,7 @@ This is the execution layer for all gesture-triggered system operations.
 
 import pyautogui
 import time
-import subprocess
-import sys
-from config import CLICK_COOLDOWN
+import ctypes
 
 
 class ActionController:
@@ -27,8 +25,12 @@ class ActionController:
             'middle_click': 0.1,
             'scroll_up': 0.05,
             'scroll_down': 0.05,
+            'minimize_window': 3.0,  # 3s cooldown between minimizes (one window at a time)
+            'maximize_window': 3.0,  # 3s cooldown between maximizes
         }
         self.last_action_time_per_action = {}
+
+        self.last_minimized_hwnd = None   #Track the handle of the last minimized window
 
     # ============= MOUSE ACTIONS =============
 
@@ -56,25 +58,61 @@ class ActionController:
 
     def scroll_up(self):
         """Scroll up."""
-        pyautogui.scroll(3)  # Scroll up 3 clicks
+        pyautogui.scroll(3)
         return True
 
     def scroll_down(self):
         """Scroll down."""
-        pyautogui.scroll(-3)  # Scroll down 3 clicks
+        pyautogui.scroll(-3)
         return True
 
     # ============= WINDOW OPERATIONS =============
 
     def minimize_window(self):
-        """Minimize current window."""
-        # Windows: Win + Down minimizes window
+        """Save the current window handle and minimize it."""
+        try:
+            # 1. Get current active window handle
+            hwnd = ctypes.windll.user32.GetForegroundWindow()
+            if hwnd:
+                # Store this window so maximize_window can bring it back later
+                self.last_minimized_hwnd = hwnd
+                
+                # 6 = SW_MINIMIZE (minimizes window)
+                ctypes.windll.user32.ShowWindow(hwnd, 6)
+                print(f"[ACTION] Minimized window HWND: {hwnd}")
+                return True
+        except Exception as e:
+            print(f"Error minimizing: {e}")
+
+        # Fallback hotkey
+        pyautogui.hotkey('win', 'down')
         pyautogui.hotkey('win', 'down')
         return True
 
     def maximize_window(self):
-        """Maximize current window."""
-        # Windows: Win + Up maximizes window
+        """Restore and maximize the previously minimized window."""
+        try:
+            # Check if we stored a previously minimized window
+            if self.last_minimized_hwnd and ctypes.windll.user32.IsWindow(self.last_minimized_hwnd):
+                # 9 = SW_RESTORE (brings minimized window back to screen)
+                ctypes.windll.user32.ShowWindow(self.last_minimized_hwnd, 9)
+                
+                # 3 = SW_MAXIMIZE (maximizes it)
+                ctypes.windll.user32.ShowWindow(self.last_minimized_hwnd, 3)
+                
+                # Bring window to front
+                ctypes.windll.user32.SetForegroundWindow(self.last_minimized_hwnd)
+                print(f"[ACTION] Restored & Maximized window HWND: {self.last_minimized_hwnd}")
+                return True
+            else:
+                # Fallback: Maximize whatever is currently focused
+                hwnd = ctypes.windll.user32.GetForegroundWindow()
+                if hwnd:
+                    ctypes.windll.user32.ShowWindow(hwnd, 3)
+                    return True
+        except Exception as e:
+            print(f"Error maximizing: {e}")
+
         pyautogui.hotkey('win', 'up')
         return True
 
@@ -85,7 +123,6 @@ class ActionController:
 
     def toggle_window_state(self):
         """Toggle between maximized and normal state."""
-        # This simulates double-clicking title bar or using Win+Up twice
         pyautogui.hotkey('win', 'up')
         return True
 
@@ -110,13 +147,11 @@ class ActionController:
 
     def volume_up(self):
         """Increase system volume."""
-        # Windows media key for volume up
         pyautogui.press('volumeup')
         return True
 
     def volume_down(self):
         """Decrease system volume."""
-        # Windows media key for volume down
         pyautogui.press('volumedown')
         return True
 
@@ -213,87 +248,51 @@ class ActionController:
     # ============= GENERIC KEYBOARD ACTIONS =============
 
     def press_key(self, key):
-        """
-        Press a single key.
-
-        Args:
-            key (str): Key name (e.g., 'space', 'enter', 'esc')
-        """
+        """Press a single key."""
         pyautogui.press(key)
         return True
 
     def hotkey(self, *keys):
-        """
-        Perform keyboard hotkey combination.
-
-        Args:
-            *keys: Key names (e.g., 'ctrl', 'alt', 'del')
-        """
+        """Perform keyboard hotkey combination."""
         pyautogui.hotkey(*keys)
         return True
 
     def type_text(self, text):
-        """
-        Type text.
-
-        Args:
-            text (str): Text to type
-        """
+        """Type text."""
         pyautogui.typewrite(text, interval=0.05)
         return True
 
     # ============= ACTION EXECUTION =============
 
     def execute_action(self, action_name):
-        """
-        Execute an action by name with debouncing.
-
-        Args:
-            action_name (str): Name of the action to execute
-
-        Returns:
-            bool: True if action was executed, False otherwise
-        """
-        # Check debounce/cooldown for this specific action
+        """Execute an action by name with debouncing."""
         current_time = time.time()
         last_time = self.last_action_time_per_action.get(action_name, 0)
-        cooldown = self.action_cooldowns.get(action_name, 0.1)  # Default 100ms cooldown
-        
+        cooldown = self.action_cooldowns.get(action_name, 0.1)
+
         if current_time - last_time < cooldown:
-            return False  # Still in cooldown period
-        
-        # Map action names to methods
+            return False
+
         actions = {
-            # Mouse actions
             'left_click': self.left_click,
             'right_click': self.right_click,
             'double_click': self.double_click,
             'middle_click': self.middle_click,
             'scroll_up': self.scroll_up,
             'scroll_down': self.scroll_down,
-
-            # Window operations
             'minimize_window': self.minimize_window,
             'maximize_window': self.maximize_window,
             'close_window': self.close_window,
             'toggle_window_state': self.toggle_window_state,
-
-            # Application switching
             'switch_application': self.switch_application,
             'switch_application_reverse': self.switch_application_reverse,
             'open_task_view': self.open_task_view,
-
-            # Volume control
             'volume_up': self.volume_up,
             'volume_down': self.volume_down,
             'volume_mute': self.volume_mute,
-
-            # Media controls
             'media_play_pause': self.media_play_pause,
             'media_next': self.media_next,
             'media_previous': self.media_previous,
-
-            # Keyboard shortcuts
             'undo': self.undo,
             'redo': self.redo,
             'copy': self.copy,
@@ -302,8 +301,6 @@ class ActionController:
             'select_all': self.select_all,
             'save': self.save,
             'screenshot': self.screenshot,
-
-            # Utility
             'do_nothing': self.do_nothing,
             'open_start_menu': self.open_start_menu,
             'open_run_dialog': self.open_run_dialog,
@@ -311,11 +308,10 @@ class ActionController:
             'show_desktop': self.show_desktop,
         }
 
-        # Execute the action if it exists
         if action_name in actions:
             try:
                 actions[action_name]()
-                self.last_action_time_per_action[action_name] = current_time  # Record cooldown
+                self.last_action_time_per_action[action_name] = current_time
                 return True
             except Exception as e:
                 print(f"Error executing action '{action_name}': {e}")
@@ -325,57 +321,20 @@ class ActionController:
             return False
 
     def get_all_actions(self):
-        """
-        Get list of all available actions.
-
-        Returns:
-            list: List of action names
-        """
+        """Get list of all available actions."""
         return [
-            'left_click',
-            'right_click',
-            'double_click',
-            'middle_click',
-            'scroll_up',
-            'scroll_down',
-            'minimize_window',
-            'maximize_window',
-            'close_window',
-            'toggle_window_state',
-            'switch_application',
-            'switch_application_reverse',
-            'open_task_view',
-            'volume_up',
-            'volume_down',
-            'volume_mute',
-            'media_play_pause',
-            'media_next',
-            'media_previous',
-            'undo',
-            'redo',
-            'copy',
-            'paste',
-            'cut',
-            'select_all',
-            'save',
-            'screenshot',
-            'do_nothing',
-            'open_start_menu',
-            'open_run_dialog',
-            'lock_computer',
-            'show_desktop',
+            'left_click', 'right_click', 'double_click', 'middle_click',
+            'scroll_up', 'scroll_down', 'minimize_window', 'maximize_window',
+            'close_window', 'toggle_window_state', 'switch_application',
+            'switch_application_reverse', 'open_task_view', 'volume_up',
+            'volume_down', 'volume_mute', 'media_play_pause', 'media_next',
+            'media_previous', 'undo', 'redo', 'copy', 'paste', 'cut',
+            'select_all', 'save', 'screenshot', 'do_nothing',
+            'open_start_menu', 'open_run_dialog', 'lock_computer', 'show_desktop',
         ]
 
     def get_action_display_name(self, action_name):
-        """
-        Get human-readable name for action.
-
-        Args:
-            action_name (str): Internal action name
-
-        Returns:
-            str: Display name
-        """
+        """Get human-readable name for action."""
         display_names = {
             'left_click': 'Left Click',
             'right_click': 'Right Click',

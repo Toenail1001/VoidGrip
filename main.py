@@ -52,6 +52,8 @@ class GestureDetectionWorker(QObject):
         # Initialize gesture mapper and action controller
         self.gesture_mapper = GestureMapper()
         self.action_controller = ActionController()
+
+        self.last_executed_gesture = "none"
         
         # Thread lock for safe gesture_mapper access
         self.mapper_lock = threading.Lock()
@@ -105,8 +107,11 @@ class GestureDetectionWorker(QObject):
 
                 # Handle detected hands
                 if results.multi_hand_landmarks:
-                    for hand_landmarks in results.multi_hand_landmarks:
-                        # Recognize gesture
+                    for i, hand_landmarks in enumerate(results.multi_hand_landmarks):
+                        # Gets whether the hand is Left or Right
+                        hand_label = results.multi_handedness[i].classification[0].label
+
+                        # 1. Recognize gesture using GestureRecognizer
                         gesture_type, metadata = self.gesture_recognizer.get_gesture(
                             hand_landmarks
                         )
@@ -133,7 +138,6 @@ class GestureDetectionWorker(QObject):
 
                         # Draw cursor indicator (index finger)
                         if self.gesture_recognizer.is_pinching:
-                            # Larger circle when pinching
                             cv2.circle(
                                 frame_with_landmarks,
                                 index_pos,
@@ -149,7 +153,6 @@ class GestureDetectionWorker(QObject):
                                 1
                             )
                         else:
-                            # Normal cursor indicator
                             cv2.circle(
                                 frame_with_landmarks,
                                 index_pos,
@@ -169,14 +172,14 @@ class GestureDetectionWorker(QObject):
                             1
                         )
 
-                        # Emit gesture signal
+                        # 2. Emit gesture signal to update the GUI label ("Last Gesture: ...")
                         if gesture_type != GestureType.NONE:
                             self.gesture_detected.emit(
                                 gesture_type.value,
                                 metadata
                             )
 
-                            # Handle gesture (mouse/keyboard control)
+                            # 3. Look up mapped action (e.g., fist -> minimize_window) and execute
                             self._handle_gesture(gesture_type, metadata)
 
                         # Move cursor
@@ -203,7 +206,7 @@ class GestureDetectionWorker(QObject):
                 # Add instructions
                 cv2.putText(
                     frame_with_landmarks,
-                    "Pinch: Left Click | Move hand to move cursor",
+                    "Pinch: Click | Fist: Minimize | Open Palm: Maximize",
                     (10, 50),
                     cv2.FONT_HERSHEY_SIMPLEX,
                     0.45,
@@ -212,8 +215,7 @@ class GestureDetectionWorker(QObject):
                 )
 
                 # Add gesture indicator with better styling
-                if self.gesture_recognizer.is_pinching:
-                    # Draw indicator box
+                if self.gesture_recognizer and self.gesture_recognizer.is_pinching:
                     cv2.rectangle(
                         frame_with_landmarks,
                         (10, 80),
@@ -231,7 +233,6 @@ class GestureDetectionWorker(QObject):
                         1
                     )
                 else:
-                    # Normal indicator
                     cv2.rectangle(
                         frame_with_landmarks,
                         (10, 80),
@@ -263,20 +264,29 @@ class GestureDetectionWorker(QObject):
     def _handle_gesture(self, gesture_type, metadata):
         """
         Execute system action for detected gesture using gesture-action mapping.
-
-        Args:
-            gesture_type (GestureType): Type of gesture detected
-            metadata (dict): Gesture metadata
+        Guarantees ONLY ONE execution per gesture until hand resets to 'none'.
         """
-        # Get gesture name from enum
-        gesture_name = gesture_type.value
-        
-        # Look up the action for this gesture in the mapping (thread-safe)
+        gesture_name = gesture_type.value  # e.g. "fist", "open_palm", "none"
+
+        # 1. If hand returns to 'none', unlock the latch so the next gesture can fire
+        if gesture_name == "none":
+            self.last_executed_gesture = "none"
+            return
+
+        # 2. If this gesture was ALREADY executed during this gesture hold, IGNORE IT
+        if gesture_name == self.last_executed_gesture:
+            return
+
+        # 3. Otherwise, execute the mapped action ONCE and lock it
         with self.mapper_lock:
             action_name = self.gesture_mapper.get_action(gesture_name)
-        
-        # Execute the action
-        self.action_controller.execute_action(action_name)
+
+        if action_name != "do_nothing":
+            print(f"[ACTION EXECUTION] Triggering action '{action_name}' for gesture '{gesture_name}'")
+            executed = self.action_controller.execute_action(action_name)
+            if executed:
+                # Lock it so it CANNOT run again until you release your hand!
+                self.last_executed_gesture = gesture_name
 
     def _convert_cv_to_qt(self, cv_img):
         """Convert OpenCV image to Qt format."""
@@ -339,7 +349,7 @@ class GestureControlGUI(QMainWindow):
         self.camera_label = QLabel()
         self.camera_label.setStyleSheet("border: 2px solid #ccc; background-color: #000;")
         self.camera_label.setFixedSize(CAMERA_FEED_WIDTH, CAMERA_FEED_HEIGHT)
-        self.camera_label.setAlignment(Qt.AlignCenter)  # Center the image
+        self.camera_label.setAlignment(Qt.AlignCenter)
         left_layout.addWidget(self.camera_label)
 
         # Right side: Controls
@@ -418,17 +428,14 @@ class GestureControlGUI(QMainWindow):
             failsafe_label.setStyleSheet("color: #FF9800; font-size: 10pt;")
             right_layout.addWidget(failsafe_label)
 
-        # Stretch to fill remaining space
         right_layout.addStretch()
 
         # Info section
         info_text = ("Supported Gestures:\n"
                      "• Point → Move cursor\n"
                      "• Pinch → Configured action\n"
-                     "• Double pinch → Configured action\n"
-                     "• Swipe up/down/left/right\n"
-                     "• Palm open\n"
-                     "• Thumbs up/down\n\n"
+                     "• Fist → Minimize Window\n"
+                     "• Open Palm → Maximize Window\n\n"
                      "Click 'Configure Gestures' to customize actions!")
         info_label = QLabel(info_text)
         info_label.setStyleSheet("color: #666; font-size: 9pt; background-color: #f5f5f5; padding: 10px; border-radius: 5px;")
@@ -461,33 +468,20 @@ class GestureControlGUI(QMainWindow):
     def _on_settings_clicked(self):
         """Handle settings button click - opens gesture mapping configuration."""
         dialog = GestureMappingDialog(self)
-        # Connect signal to update worker when mappings change
         dialog.mappings_changed.connect(self._on_mappings_updated)
         dialog.exec_()
 
     def _on_mappings_updated(self, mappings):
-        """
-        Handle gesture-action mapping updates.
-
-        Args:
-            mappings (dict): New gesture→action mappings
-        """
+        """Handle gesture-action mapping updates."""
         if self.worker:
             self.worker.update_mappings(mappings)
 
     def _on_frame_ready(self, qt_image):
         """Update camera display with new frame, preserving aspect ratio."""
-        # Scale the image to fit the label while maintaining aspect ratio
         label_width = self.camera_label.width()
         label_height = self.camera_label.height()
-        
-        # Create pixmap from the Qt image
         pixmap = QPixmap.fromImage(qt_image)
-        
-        # Scale to fit label while preserving aspect ratio
         scaled_pixmap = pixmap.scaled(label_width, label_height, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-        
-        # Set the scaled pixmap
         self.camera_label.setPixmap(scaled_pixmap)
 
     def _on_status_changed(self, status):
@@ -497,7 +491,7 @@ class GestureControlGUI(QMainWindow):
         self.status_label.setStyleSheet(f"color: {color}; font-weight: bold; font-size: 12pt;")
 
     def _on_gesture_detected(self, gesture_type, metadata):
-        """Update gesture indicator."""
+        """Update gesture indicator label in the sidebar."""
         gesture_text = gesture_type.replace("_", " ").title()
         self.gesture_label.setText(f"Last Gesture: {gesture_text}")
 
