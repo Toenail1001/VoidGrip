@@ -17,6 +17,8 @@ class GestureMapper:
     # Default gesture mappings (provided at first run)
     DEFAULT_MAPPINGS = {
         "pinch": "left_click",
+        "thumbs_up": "volume_up",
+        "thumbs_down": "volume_down",
         "peace_sign": "do_nothing",
     }
 
