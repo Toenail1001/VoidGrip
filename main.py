@@ -6,6 +6,9 @@ Integrates gesture detection with configurable action mapping.
 
 import sys
 import cv2
+import time
+import pyautogui
+import ctypes
 import threading
 from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
@@ -22,6 +25,28 @@ from modules import (
     CursorSmoother, ActionController, GestureMapper
 )
 from gui_mapper import GestureMappingDialog
+
+
+# ── Cursor helpers (Windows) ─────────────────────────────────────────────────
+_user32 = ctypes.windll.user32
+_IDC_SIZEALL = 32646   # four-directional arrow (closest to browser auto-scroll)
+_OCR_NORMAL  = 32512   # the slot we replace when in scroll mode
+
+def _set_scroll_cursor():
+    """Change the system cursor to the four-arrow auto-scroll icon."""
+    try:
+        h = _user32.LoadCursorW(None, _IDC_SIZEALL)
+        _user32.SetSystemCursor(h, _OCR_NORMAL)
+    except Exception:
+        pass
+
+def _restore_cursor():
+    """Restore all system cursors to Windows defaults."""
+    try:
+        _user32.SystemParametersInfoW(0x0057, 0, None, 0)  # SPI_SETCURSORS
+    except Exception:
+        pass
+# ─────────────────────────────────────────────────────────────────────────────
 
 
 class GestureDetectionWorker(QObject):
@@ -55,6 +80,10 @@ class GestureDetectionWorker(QObject):
         
         # Thread lock for safe gesture_mapper access
         self.mapper_lock = threading.Lock()
+
+        # Auto-scroll cursor state
+        self.is_auto_scrolling = False          # True while scroll mode is active
+        self._auto_scroll_this_frame = False    # flag reset/set each frame
 
     def set_smoothing_factor(self, factor):
         """Update smoothing factor."""
@@ -102,6 +131,12 @@ class GestureDetectionWorker(QObject):
 
                 # Process frame with hand detection
                 results, frame_with_landmarks = self.hand_tracker.process_frame(frame)
+
+                # Reset per-frame auto-scroll flag
+                self._auto_scroll_this_frame = False
+
+                # Track last external foreground window (for maximize-from-taskbar)
+                self.action_controller.update_last_foreground()
 
                 # Handle detected hands
                 if results.multi_hand_landmarks:
@@ -189,6 +224,14 @@ class GestureDetectionWorker(QObject):
                         target_y = (screen_h / self.hand_tracker.frame_height) * index_pos[1]
                         self.cursor_smoother.move_to(target_x, target_y)
 
+                # ── Auto-scroll cursor management (once per frame) ───────────
+                if self._auto_scroll_this_frame and not self.is_auto_scrolling:
+                    self.is_auto_scrolling = True
+                    _set_scroll_cursor()
+                elif not self._auto_scroll_this_frame and self.is_auto_scrolling:
+                    self.is_auto_scrolling = False
+                    _restore_cursor()
+
                 # Add background bar for text readability
                 cv2.rectangle(frame_with_landmarks, (0, 0), (640, 95), (0, 0, 0), -1)
                 cv2.rectangle(frame_with_landmarks, (0, 0), (640, 95), (100, 100, 100), 1)
@@ -272,14 +315,48 @@ class GestureDetectionWorker(QObject):
             gesture_type (GestureType): Type of gesture detected
             metadata (dict): Gesture metadata
         """
-        # Get gesture name from enum
+        # Look up the mapped action (thread-safe)
         gesture_name = gesture_type.value
-        
-        # Look up the action for this gesture in the mapping (thread-safe)
         with self.mapper_lock:
             action_name = self.gesture_mapper.get_action(gesture_name)
-        
-        # Execute the action
+
+        # ── Auto-scroll mode ────────────────────────────────────────────────
+        # Any gesture mapped to 'auto_scroll' gets proportional scrolling:
+        #   cursor above screen centre → scroll up  (faster the further away)
+        #   cursor below screen centre → scroll down (faster the further away)
+        #   within 10% dead-zone      → no scroll
+        if action_name == 'auto_scroll':
+            screen_h = self.system_controller.screen_height
+            screen_centre_y = screen_h / 2
+            cursor_x, cursor_y = pyautogui.position()
+
+            offset = cursor_y - screen_centre_y       # +ve = below centre
+            dead_zone = screen_h * 0.10               # 10% dead-zone
+
+            if abs(offset) > dead_zone:
+                effective  = abs(offset) - dead_zone
+                max_range  = screen_centre_y - dead_zone
+                ratio      = min(effective / max_range, 1.0)
+
+                # Scale 1 → 15 scroll clicks per tick
+                scroll_amount = ratio * 15
+                if offset > 0:
+                    scroll_amount = -scroll_amount    # below centre → scroll down
+                # offset < 0 → above centre → scroll_amount stays positive (up)
+
+                now     = time.time()
+                last    = self.action_controller.last_action_time_per_action.get('auto_scroll', 0)
+                cd      = self.action_controller.action_cooldowns.get('auto_scroll', 0.05)
+                if now - last >= cd:
+                    self.action_controller.auto_scroll(scroll_amount)
+                    self.action_controller.last_action_time_per_action['auto_scroll'] = now
+                    print(f"[AUTO-SCROLL] offset={offset:.0f}px  amount={scroll_amount:.1f}")
+
+            self._auto_scroll_this_frame = True   # tell run loop: cursor stays
+            return
+        # ────────────────────────────────────────────────────────────────────
+
+        # Execute the mapped action normally
         self.action_controller.execute_action(action_name)
 
     def _convert_cv_to_qt(self, cv_img):
@@ -299,6 +376,7 @@ class GestureDetectionWorker(QObject):
     def stop(self):
         """Stop gesture detection gracefully."""
         self.running = False
+        _restore_cursor()   # Always restore cursor on stop
         if self.gesture_recognizer:
             self.gesture_recognizer.reset()
         if self.system_controller:

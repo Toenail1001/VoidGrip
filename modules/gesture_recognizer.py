@@ -29,6 +29,7 @@ class GestureType(Enum):
     OPEN_PALM = "open_palm"
     FIST = "fist"
     PEACE_SIGN = "peace_sign"
+    SIGN_OF_HORNS = "sign_of_horns"
 
 class GestureRecognizer:
     """
@@ -54,6 +55,10 @@ class GestureRecognizer:
         self.previous_gesture = GestureType.NONE
         self.gesture_frame_count = 0
         self.required_frames = 5
+
+        # Dedicated counter for peace sign (used for continuous auto-scroll)
+        self.peace_sign_frames = 0
+        self.peace_sign_required = 3  # Fewer frames needed for scroll activation
 
     @staticmethod
     def distance(p1, p2):
@@ -221,6 +226,37 @@ class GestureRecognizer:
         # Must be spread apart by at least 15px (finger-width separation)
         return spread > 15
 
+    def is_sign_of_horns(self, landmarks, hand_label):
+        """
+        Detect Sign of Horns gesture (🤘).
+        Index and pinky extended, middle/ring/thumb folded.
+
+        Conflict check vs other gestures:
+          - Peace sign:  index + MIDDLE up  →  middle must be DOWN here ✓
+          - Open palm:   all fingers up      →  middle/ring must be DOWN here ✓
+          - Thumbs up/down: thumb extended   →  thumb must be DOWN here ✓
+        """
+        states = self.get_finger_states(landmarks, hand_label)
+
+        fingers_correct = (
+            states["index"]  and      # index up
+            not states["middle"] and  # middle folded  (key: not peace sign)
+            not states["ring"]   and  # ring folded
+            states["pinky"]  and      # pinky up
+            not states["thumb"]       # thumb folded   (key: not thumbs gesture)
+        )
+
+        if not fingers_correct:
+            return False
+
+        # Spread check: index tip and pinky tip should be noticeably separated
+        index_tip = self.hand_tracker.get_landmark_position(landmarks, 8)
+        pinky_tip = self.hand_tracker.get_landmark_position(landmarks, 20)
+        spread = self.distance(index_tip, pinky_tip)
+
+        # Natural horn spread is large; require at least 20px separation
+        return spread > 20
+
     def get_gesture(self, landmarks, hand_label):
         """
         Recognize gesture from hand landmarks.
@@ -262,6 +298,9 @@ class GestureRecognizer:
 
         elif self.is_peace_sign(landmarks, hand_label):
             gesture = GestureType.PEACE_SIGN
+
+        elif self.is_sign_of_horns(landmarks, hand_label):
+            gesture = GestureType.SIGN_OF_HORNS
         
         elif self.is_open_palm(landmarks, hand_label):
             gesture = GestureType.OPEN_PALM
@@ -276,7 +315,20 @@ class GestureRecognizer:
             self.previous_gesture = gesture
             self.gesture_frame_count = 1
 
+        # Update dedicated peace sign counter
+        if gesture == GestureType.PEACE_SIGN:
+            self.peace_sign_frames += 1
+        else:
+            self.peace_sign_frames = 0
+
         current_time = time.time()
+
+        # Peace sign is used for continuous auto-scroll — bypass cooldown so it
+        # fires every frame. All other gestures still debounce normally.
+        if gesture == GestureType.PEACE_SIGN:
+            if self.peace_sign_frames >= self.peace_sign_required:
+                return gesture, {"position": index_pos}
+            return GestureType.NONE, {"position": index_pos}
 
         if current_time - self.last_gesture_time < self.gesture_cooldown:
             return GestureType.NONE, {"position": index_pos}
@@ -295,3 +347,4 @@ class GestureRecognizer:
     def reset(self):
         """Reset gesture state (useful when stopping detection)."""
         self.is_pinching = False
+        self.peace_sign_frames = 0
