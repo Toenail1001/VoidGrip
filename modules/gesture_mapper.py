@@ -23,6 +23,8 @@ class GestureMapper:
         "thumbs_up": "do_nothing",
         "thumbs_down": "do_nothing",
         "open_palm": "do_nothing",
+        "four_fingers": "do_nothing",
+        "ily_sign": "do_nothing",
     }
 
     def __init__(self, mappings_file="gesture_action_mappings.json"):

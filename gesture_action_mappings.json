@@ -1,9 +1,11 @@
 {
   "pinch": "left_click",
   "peace_sign": "auto_scroll",
-  "sign_of_horns": "maximize_window",
+  "sign_of_horns": "switch_application",
+  "ily_sign": "switch_application_reverse",
   "fist": "minimize_window",
-  "thumbs_up": "close_window",
+  "thumbs_up": "volume_up",
   "thumbs_down": "volume_down",
-  "open_palm": "do_nothing"
+  "open_palm": "do_nothing",
+  "four_fingers": "maximize_window"
 }

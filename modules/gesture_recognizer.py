@@ -30,6 +30,8 @@ class GestureType(Enum):
     FIST = "fist"
     PEACE_SIGN = "peace_sign"
     SIGN_OF_HORNS = "sign_of_horns"
+    FOUR_FINGERS = "four_fingers"
+    ILY_SIGN = "ily_sign"
 
 class GestureRecognizer:
     """
@@ -257,6 +259,44 @@ class GestureRecognizer:
         # Natural horn spread is large; require at least 20px separation
         return spread > 20
 
+    def is_ily_sign(self, landmarks, hand_label):
+        """
+        Detect ILY sign (🤟): index + pinky + thumb extended, middle + ring folded.
+        Like sign of horns but with the thumb also out.
+
+        Conflict checks:
+          - Sign of horns: thumb must be DOWN → here thumb is UP ✓
+          - Open palm:     middle + ring must be UP → here they are DOWN ✓
+          - Thumbs up/down: index + pinky must be DOWN → here they are UP ✓
+        """
+        states = self.get_finger_states(landmarks, hand_label)
+        return (
+            states["index"]      and   # index up
+            not states["middle"] and   # middle folded
+            not states["ring"]   and   # ring folded
+            states["pinky"]      and   # pinky up
+            states["thumb"]            # thumb also up  (key: distinct from sign_of_horns)
+        )
+
+    def is_four_fingers(self, landmarks, hand_label):
+        """
+        Detect four-finger gesture: index, middle, ring, pinky extended;
+        thumb folded into palm.
+
+        Conflict checks:
+          - Open palm:    thumb must also be UP  → here thumb is DOWN ✓
+          - Sign of horns: middle + ring must be DOWN → here they are UP ✓
+          - Peace sign:   ring + pinky must be DOWN → here they are UP ✓
+        """
+        states = self.get_finger_states(landmarks, hand_label)
+        return (
+            states["index"]  and
+            states["middle"] and
+            states["ring"]   and
+            states["pinky"]  and
+            not states["thumb"]      # thumb folded  (key distinction from open_palm)
+        )
+
     def get_gesture(self, landmarks, hand_label):
         """
         Recognize gesture from hand landmarks.
@@ -301,7 +341,13 @@ class GestureRecognizer:
 
         elif self.is_sign_of_horns(landmarks, hand_label):
             gesture = GestureType.SIGN_OF_HORNS
-        
+
+        elif self.is_ily_sign(landmarks, hand_label):
+            gesture = GestureType.ILY_SIGN
+
+        elif self.is_four_fingers(landmarks, hand_label):
+            gesture = GestureType.FOUR_FINGERS
+
         elif self.is_open_palm(landmarks, hand_label):
             gesture = GestureType.OPEN_PALM
         
