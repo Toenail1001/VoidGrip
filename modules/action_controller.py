@@ -29,19 +29,28 @@ class ActionController:
         self.last_action_time = time.time()
         # Per-action cooldown tracking for debouncing
         self.action_cooldowns = {
-            'left_click': 0.1,  # 100ms between clicks
+            'left_click': 0.1,
             'right_click': 0.1,
             'double_click': 0.2,
             'middle_click': 0.1,
             'scroll_up': 0.05,
             'scroll_down': 0.05,
-            'auto_scroll': 0.05,  # 50ms between auto-scroll ticks
+            'auto_scroll': 0.05,
+            'switch_application': 0.4,          # 400 ms between each Tab press
+            'switch_application_reverse': 0.4,
         }
         self.last_action_time_per_action = {}
 
         # Track the last external (non-VoidGrip) foreground window so we can
         # maximize it even after it has been minimised to the taskbar.
         self.last_app_hwnd = None
+
+        # Round-robin index so each maximize gesture picks the NEXT minimized window
+        self._maximize_index = 0
+
+        # Alt+Tab switcher state
+        self._alt_held = False           # True while we have Alt held down
+        self._alt_release_timer = None   # threading.Timer to auto-release Alt
 
     # ============= MOUSE ACTIONS =============
 
@@ -127,11 +136,11 @@ class ActionController:
             return False
         return True
 
-    def _find_minimized_app(self):
+    def _find_minimized_apps(self):
         """
-        Enumerate all top-level windows and return the first minimized
-        real application window (not VoidGrip, not shell chrome).
-        Returns the hwnd or None.
+        Enumerate all top-level windows and return every minimized
+        real application window (not VoidGrip, not shell chrome),
+        in Z-order (most-recently-active first).
         """
         found = []
 
@@ -145,7 +154,7 @@ class ActionController:
             return True
 
         _user32.EnumWindows(EnumWindowsProc(callback), 0)
-        return found[0] if found else None
+        return found
 
     def update_last_foreground(self):
         """
@@ -171,39 +180,39 @@ class ActionController:
 
     def maximize_window(self):
         """
-        Maximize a window using three-tier fallback logic:
-          1. Foreground is a real external app (not minimized) → maximize it.
-          2. last_app_hwnd is valid                            → restore+maximize.
-          3. EnumWindows scan for any minimized app window     → restore+maximize.
+        Maximize windows in a round-robin cycle.
+        Each gesture call maximizes the NEXT minimized app in sequence.
+        Order:
+          1. Collect all currently minimized real app windows.
+          2. Pick the one at _maximize_index % len(list).
+          3. If none are minimized and a foreground external app exists, maximize it.
         """
         try:
-            fg = _user32.GetForegroundWindow()
-            target = None
+            minimized = self._find_minimized_apps()
 
-            # Tier 1: a real external app is already in the foreground
-            if fg and self._is_real_app_window(fg) and not self._is_minimized(fg):
-                target = fg
-                print(f"[MAXIMIZE] tier-1 foreground hwnd={fg}")
-
-            # Tier 2: use the last tracked external window
-            if target is None and self.last_app_hwnd:
-                if _user32.IsWindow(self.last_app_hwnd):
-                    target = self.last_app_hwnd
-                    print(f"[MAXIMIZE] tier-2 last_app_hwnd={target}")
-                else:
-                    self.last_app_hwnd = None
-
-            # Tier 3: scan for any minimized app window
-            if target is None:
-                target = self._find_minimized_app()
-                if target:
-                    print(f"[MAXIMIZE] tier-3 EnumWindows found hwnd={target}")
-
-            if target:
+            if minimized:
+                # Clamp index in case windows were closed since last call
+                self._maximize_index = self._maximize_index % len(minimized)
+                target = minimized[self._maximize_index]
+                self._maximize_index += 1
+                print(f"[MAXIMIZE] restoring window {self._maximize_index}/{len(minimized)} hwnd={target}")
                 _user32.ShowWindow(target, _SW_MAXIMIZE)
                 _user32.SetForegroundWindow(target)
             else:
-                print("[MAXIMIZE] no target window found")
+                # No minimized windows — fall back to current/last foreground
+                fg = _user32.GetForegroundWindow()
+                target = None
+                if fg and self._is_real_app_window(fg) and not self._is_minimized(fg):
+                    target = fg
+                elif self.last_app_hwnd and _user32.IsWindow(self.last_app_hwnd):
+                    target = self.last_app_hwnd
+                if target:
+                    print(f"[MAXIMIZE] no minimized windows, maximizing fg hwnd={target}")
+                    _user32.ShowWindow(target, _SW_MAXIMIZE)
+                    _user32.SetForegroundWindow(target)
+                else:
+                    print("[MAXIMIZE] no target window found")
+                self._maximize_index = 0  # reset cycle
 
         except Exception as e:
             print(f"maximize_window error: {e}")
@@ -245,14 +254,50 @@ class ActionController:
 
     # ============= APPLICATION SWITCHING =============
 
+    # ── internal helpers ────────────────────────────────────────────────────
+
+    def _ensure_alt_held(self):
+        """
+        Make sure the Alt key is physically held down and schedule its
+        automatic release 800 ms after the gesture stops firing.
+        """
+        import threading
+        if not self._alt_held:
+            pyautogui.keyDown('alt')
+            self._alt_held = True
+        # Restart the release countdown on every gesture tick
+        if self._alt_release_timer is not None:
+            self._alt_release_timer.cancel()
+        self._alt_release_timer = threading.Timer(0.8, self._release_alt)
+        self._alt_release_timer.daemon = True
+        self._alt_release_timer.start()
+
+    def _release_alt(self):
+        """Release the Alt key and clean up state."""
+        if self._alt_held:
+            pyautogui.keyUp('alt')
+            self._alt_held = False
+        self._alt_release_timer = None
+
+    # ── public switcher actions ──────────────────────────────────────────────
+
     def switch_application(self):
-        """Switch to next application (Alt+Tab)."""
-        pyautogui.hotkey('alt', 'tab')
+        """
+        Cycle forward through the Alt+Tab switcher.
+        Hold the gesture to keep stepping; releasing the gesture
+        commits the selection after 800 ms.
+        """
+        self._ensure_alt_held()
+        pyautogui.press('tab')          # advance one step
         return True
 
     def switch_application_reverse(self):
-        """Switch to previous application (Alt+Shift+Tab)."""
-        pyautogui.hotkey('alt', 'shift', 'tab')
+        """
+        Cycle backward through the Alt+Tab switcher (Alt+Shift+Tab).
+        Hold the gesture to keep stepping backward.
+        """
+        self._ensure_alt_held()
+        pyautogui.hotkey('shift', 'tab')  # step backward in switcher
         return True
 
     def open_task_view(self):
