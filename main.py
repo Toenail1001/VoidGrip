@@ -29,14 +29,20 @@ from gui_mapper import GestureMappingDialog
 
 # ── Cursor helpers (Windows) ─────────────────────────────────────────────────
 _user32 = ctypes.windll.user32
-_IDC_SIZEALL = 32646   # four-directional arrow (closest to browser auto-scroll)
 _OCR_NORMAL  = 32512   # the slot we replace when in scroll mode
+IMAGE_CURSOR = 2
+LR_LOADFROMFILE = 0x0010
 
 def _set_scroll_cursor():
-    """Change the system cursor to the four-arrow auto-scroll icon."""
+    """Change the system cursor to the custom auto-scroll icon."""
     try:
-        h = _user32.LoadCursorW(None, _IDC_SIZEALL)
-        _user32.SetSystemCursor(h, _OCR_NORMAL)
+        # Load our generated circular up/down arrow cursor
+        import os
+        cur_path = os.path.abspath("scroll.cur")
+        if os.path.exists(cur_path):
+            h = _user32.LoadImageW(0, cur_path, IMAGE_CURSOR, 0, 0, LR_LOADFROMFILE)
+            if h:
+                _user32.SetSystemCursor(h, _OCR_NORMAL)
     except Exception:
         pass
 
@@ -338,8 +344,8 @@ class GestureDetectionWorker(QObject):
                 max_range  = screen_centre_y - dead_zone
                 ratio      = min(effective / max_range, 1.0)
 
-                # Scale 1 → 15 scroll clicks per tick
-                scroll_amount = ratio * 15
+                # Scale 1 → 40 scroll clicks per tick (increased speed)
+                scroll_amount = ratio * 80
                 if offset > 0:
                     scroll_amount = -scroll_amount    # below centre → scroll down
                 # offset < 0 → above centre → scroll_amount stays positive (up)
