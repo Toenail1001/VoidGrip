@@ -68,6 +68,9 @@ class GestureMappingDialog(QDialog):
         gestures = self.gesture_mapper.get_supported_gestures()
         all_actions = self.action_controller.get_all_actions()
 
+        # These legacy actions are superseded by auto_scroll — hide from dropdowns
+        HIDDEN_ACTIONS = {"scroll_up", "scroll_down"}
+
         # Create a row for each gesture
         for gesture_name in gestures:
             gesture_layout = QHBoxLayout()
@@ -77,21 +80,20 @@ class GestureMappingDialog(QDialog):
             gesture_label.setMinimumWidth(150)
             gesture_layout.addWidget(gesture_label)
 
-            # Action dropdown
+            # Action dropdown — all gestures are fully configurable
             combo = QComboBox()
             combo.setMinimumWidth(250)
 
-            # Add actions to dropdown with display names
             for action in all_actions:
+                if action in HIDDEN_ACTIONS:
+                    continue  # scroll_up/down replaced by auto_scroll
                 display_name = self.action_controller.get_action_display_name(action)
                 combo.addItem(display_name, action)
 
-            # Connect change signal
             combo.currentIndexChanged.connect(
                 lambda idx, g=gesture_name, c=combo: self._on_mapping_changed(g, c)
             )
 
-            # Select current mapping (block signals during initialization)
             combo.blockSignals(True)
             current_action = self.gesture_mapper.get_action(gesture_name)
             index = combo.findData(current_action)
@@ -99,13 +101,12 @@ class GestureMappingDialog(QDialog):
                 combo.setCurrentIndex(index)
             combo.blockSignals(False)
 
-            # Store reference
             self.combo_boxes[gesture_name] = combo
-
             gesture_layout.addWidget(combo)
             gesture_layout.addStretch()
 
             scroll_layout.addLayout(gesture_layout)
+
 
         scroll_layout.addStretch()
         scroll.setWidget(scroll_widget)

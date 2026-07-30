@@ -1,4 +1,9 @@
 {
   "pinch": "left_click",
-  "peace_sign": "do_nothing"
+  "peace_sign": "auto_scroll",
+  "sign_of_horns": "maximize_window",
+  "fist": "minimize_window",
+  "thumbs_up": "close_window",
+  "thumbs_down": "volume_down",
+  "open_palm": "do_nothing"
 }

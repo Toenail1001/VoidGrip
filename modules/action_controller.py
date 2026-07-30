@@ -7,7 +7,15 @@ import pyautogui
 import time
 import subprocess
 import sys
+import ctypes
+import os
 from config import CLICK_COOLDOWN
+
+# Windows ShowWindow constants
+_SW_MINIMIZE  = 6
+_SW_MAXIMIZE  = 3
+_SW_RESTORE   = 9
+_user32 = ctypes.windll.user32
 
 
 class ActionController:
@@ -27,8 +35,13 @@ class ActionController:
             'middle_click': 0.1,
             'scroll_up': 0.05,
             'scroll_down': 0.05,
+            'auto_scroll': 0.05,  # 50ms between auto-scroll ticks
         }
         self.last_action_time_per_action = {}
+
+        # Track the last external (non-VoidGrip) foreground window so we can
+        # maximize it even after it has been minimised to the taskbar.
+        self.last_app_hwnd = None
 
     # ============= MOUSE ACTIONS =============
 
@@ -64,19 +77,139 @@ class ActionController:
         pyautogui.scroll(-3)  # Scroll down 3 clicks
         return True
 
+    def auto_scroll(self, scroll_amount):
+        """
+        Perform auto-scroll with a given amount (browser middle-click style).
+        Positive = scroll up, negative = scroll down.
+
+        Args:
+            scroll_amount (float): Scroll clicks. Proportional to distance from screen centre.
+        """
+        if scroll_amount == 0:
+            return False
+        # Round to nearest int, keeping at least ±1 if non-zero
+        clicks = int(scroll_amount)
+        if clicks == 0:
+            clicks = 1 if scroll_amount > 0 else -1
+        pyautogui.scroll(clicks)
+        return True
+
+    # ============= WINDOW HELPERS =============
+
+    def _is_our_window(self, hwnd):
+        """Return True if hwnd belongs to this VoidGrip process."""
+        pid = ctypes.c_ulong(0)
+        _user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        return pid.value == os.getpid()
+
+    def _is_minimized(self, hwnd):
+        """Return True if the window is iconic (minimised to taskbar)."""
+        return bool(_user32.IsIconic(hwnd))
+
+    def _is_real_app_window(self, hwnd):
+        """
+        Return True if hwnd is a genuine top-level application window
+        (has a title, is visible, not a tool/shell window, not us).
+        """
+        WS_EX_TOOLWINDOW = 0x00000080
+        if not _user32.IsWindowVisible(hwnd):
+            return False
+        if self._is_our_window(hwnd):
+            return False
+        # Must have a non-empty title
+        buf = ctypes.create_unicode_buffer(256)
+        _user32.GetWindowTextW(hwnd, buf, 256)
+        if not buf.value.strip():
+            return False
+        # Skip tool windows (notification icons, overlays, etc.)
+        ex_style = _user32.GetWindowLongW(hwnd, -20)  # GWL_EXSTYLE
+        if ex_style & WS_EX_TOOLWINDOW:
+            return False
+        return True
+
+    def _find_minimized_app(self):
+        """
+        Enumerate all top-level windows and return the first minimized
+        real application window (not VoidGrip, not shell chrome).
+        Returns the hwnd or None.
+        """
+        found = []
+
+        EnumWindowsProc = ctypes.WINFUNCTYPE(
+            ctypes.c_bool, ctypes.c_size_t, ctypes.c_size_t
+        )
+
+        def callback(hwnd, _):
+            if _user32.IsIconic(hwnd) and self._is_real_app_window(hwnd):
+                found.append(hwnd)
+            return True
+
+        _user32.EnumWindows(EnumWindowsProc(callback), 0)
+        return found[0] if found else None
+
+    def update_last_foreground(self):
+        """
+        Call once per frame from the main loop.
+        Tracks the most recent real foreground app (not VoidGrip, not shell)
+        so maximize_window can restore it even after it's sent to the taskbar.
+        """
+        hwnd = _user32.GetForegroundWindow()
+        if hwnd and self._is_real_app_window(hwnd) and not self._is_minimized(hwnd):
+            self.last_app_hwnd = hwnd
+
     # ============= WINDOW OPERATIONS =============
 
     def minimize_window(self):
-        """Minimize current window."""
-        # Windows: Win + Down minimizes window
-        pyautogui.hotkey('win', 'down')
+        """Minimize the current foreground window (direct Win32 API)."""
+        try:
+            hwnd = _user32.GetForegroundWindow()
+            if hwnd:
+                _user32.ShowWindow(hwnd, _SW_MINIMIZE)
+        except Exception as e:
+            print(f"minimize_window error: {e}")
         return True
 
     def maximize_window(self):
-        """Maximize current window."""
-        # Windows: Win + Up maximizes window
-        pyautogui.hotkey('win', 'up')
+        """
+        Maximize a window using three-tier fallback logic:
+          1. Foreground is a real external app (not minimized) → maximize it.
+          2. last_app_hwnd is valid                            → restore+maximize.
+          3. EnumWindows scan for any minimized app window     → restore+maximize.
+        """
+        try:
+            fg = _user32.GetForegroundWindow()
+            target = None
+
+            # Tier 1: a real external app is already in the foreground
+            if fg and self._is_real_app_window(fg) and not self._is_minimized(fg):
+                target = fg
+                print(f"[MAXIMIZE] tier-1 foreground hwnd={fg}")
+
+            # Tier 2: use the last tracked external window
+            if target is None and self.last_app_hwnd:
+                if _user32.IsWindow(self.last_app_hwnd):
+                    target = self.last_app_hwnd
+                    print(f"[MAXIMIZE] tier-2 last_app_hwnd={target}")
+                else:
+                    self.last_app_hwnd = None
+
+            # Tier 3: scan for any minimized app window
+            if target is None:
+                target = self._find_minimized_app()
+                if target:
+                    print(f"[MAXIMIZE] tier-3 EnumWindows found hwnd={target}")
+
+            if target:
+                _user32.ShowWindow(target, _SW_MAXIMIZE)
+                _user32.SetForegroundWindow(target)
+            else:
+                print("[MAXIMIZE] no target window found")
+
+        except Exception as e:
+            print(f"maximize_window error: {e}")
         return True
+
+
 
     def close_window(self):
         """Close current window."""
@@ -84,9 +217,30 @@ class ActionController:
         return True
 
     def toggle_window_state(self):
-        """Toggle between maximized and normal state."""
-        # This simulates double-clicking title bar or using Win+Up twice
-        pyautogui.hotkey('win', 'up')
+        """Toggle between maximized and restored state."""
+        try:
+            hwnd = _user32.GetForegroundWindow()
+            if hwnd:
+                # WM_GETMINMAXINFO: check current state via GetWindowPlacement
+                import ctypes
+                class WINDOWPLACEMENT(ctypes.Structure):
+                    _fields_ = [
+                        ('length',           ctypes.c_uint),
+                        ('flags',            ctypes.c_uint),
+                        ('showCmd',          ctypes.c_uint),
+                        ('ptMinPosition',    ctypes.c_long * 2),
+                        ('ptMaxPosition',    ctypes.c_long * 2),
+                        ('rcNormalPosition', ctypes.c_long * 4),
+                    ]
+                wp = WINDOWPLACEMENT()
+                wp.length = ctypes.sizeof(wp)
+                _user32.GetWindowPlacement(hwnd, ctypes.byref(wp))
+                if wp.showCmd == 3:   # SW_MAXIMIZE — currently maximized
+                    _user32.ShowWindow(hwnd, _SW_RESTORE)
+                else:
+                    _user32.ShowWindow(hwnd, _SW_MAXIMIZE)
+        except Exception as e:
+            print(f"toggle_window_state error: {e}")
         return True
 
     # ============= APPLICATION SWITCHING =============
@@ -271,6 +425,7 @@ class ActionController:
             'middle_click': self.middle_click,
             'scroll_up': self.scroll_up,
             'scroll_down': self.scroll_down,
+            'auto_scroll': lambda: self.auto_scroll(3),  # fallback fixed amount
 
             # Window operations
             'minimize_window': self.minimize_window,
@@ -338,6 +493,7 @@ class ActionController:
             'middle_click',
             'scroll_up',
             'scroll_down',
+            'auto_scroll',
             'minimize_window',
             'maximize_window',
             'close_window',
@@ -383,6 +539,7 @@ class ActionController:
             'middle_click': 'Middle Click',
             'scroll_up': 'Scroll Up',
             'scroll_down': 'Scroll Down',
+            'auto_scroll': 'Auto Scroll (speed by position)',
             'minimize_window': 'Minimize Window',
             'maximize_window': 'Maximize Window',
             'close_window': 'Close Window',
