@@ -30,6 +30,7 @@ class HandTracker:
             max_num_hands=MAX_HANDS,
             min_detection_confidence=MIN_DETECTION_CONFIDENCE,
             min_tracking_confidence=MIN_TRACKING_CONFIDENCE,
+            model_complexity=0,   # Lite model: ~40-50% faster, negligible accuracy loss for gestures
         )
 
         self.frame_width = 0
@@ -52,20 +53,21 @@ class HandTracker:
         # Convert BGR to RGB for MediaPipe
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
-        # Detect hands
+        # Mark as non-writeable to skip MediaPipe's internal defensive copy
+        rgb_frame.flags.writeable = False
         results = self.hands.process(rgb_frame)
+        rgb_frame.flags.writeable = True
 
-        # Draw landmarks on frame
-        frame_with_landmarks = frame.copy()
+        # Draw landmarks in-place (avoids a full frame.copy() allocation every frame)
         if results.multi_hand_landmarks:
             for hand_landmarks in results.multi_hand_landmarks:
                 self.mp_draw.draw_landmarks(
-                    frame_with_landmarks,
+                    frame,
                     hand_landmarks,
                     self.mp_hands.HAND_CONNECTIONS,
                 )
 
-        return results, frame_with_landmarks
+        return results, frame
 
     def get_landmark_position(self, landmarks, landmark_index):
         """

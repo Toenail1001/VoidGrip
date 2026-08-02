@@ -10,6 +10,8 @@ import time
 import pyautogui
 import ctypes
 import threading
+import collections
+import statistics
 from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
     QLabel, QComboBox, QSlider, QCheckBox
@@ -95,6 +97,20 @@ class GestureDetectionWorker(QObject):
         self.is_auto_scrolling = False          # True while scroll mode is active
         self._auto_scroll_this_frame = False    # flag reset/set each frame
 
+        # ── Latency profiling (rolling 60-frame window) ──────────────────────
+        _W = 60
+        self._prof = {
+            "cam_read":      collections.deque(maxlen=_W),
+            "mediapipe":     collections.deque(maxlen=_W),
+            "gesture_recog": collections.deque(maxlen=_W),
+            "action_exec":   collections.deque(maxlen=_W),
+            "cursor_move":   collections.deque(maxlen=_W),
+            "frame_render":  collections.deque(maxlen=_W),
+            "total_frame":   collections.deque(maxlen=_W),
+        }
+        self._prof_n = 0        # frames counted since last print
+        self._PROF_EVERY = 60   # print table every N frames
+
     def set_smoothing_factor(self, factor):
         """Update smoothing factor."""
         if self.cursor_smoother:
@@ -131,16 +147,21 @@ class GestureDetectionWorker(QObject):
                 if self.paused:
                     continue
 
+                _t0 = time.perf_counter()   # ── frame start ──
+
+                # ── Stage 1: Camera read + flip ──────────────────────────────
+                _ta = time.perf_counter()
                 success, frame = cap.read()
                 if not success:
                     self.status_changed.emit("ERROR: Could not read frame!")
                     break
-
-                # Flip frame horizontally
                 frame = cv2.flip(frame, 1)
+                self._prof["cam_read"].append((time.perf_counter() - _ta) * 1000)
 
-                # Process frame with hand detection
+                # ── Stage 2: MediaPipe inference ─────────────────────────────
+                _ta = time.perf_counter()
                 results, frame_with_landmarks = self.hand_tracker.process_frame(frame)
+                self._prof["mediapipe"].append((time.perf_counter() - _ta) * 1000)
 
                 # Reset per-frame auto-scroll flag
                 self._auto_scroll_this_frame = False
@@ -148,17 +169,24 @@ class GestureDetectionWorker(QObject):
                 # Track last external foreground window (for maximize-from-taskbar)
                 self.action_controller.update_last_foreground()
 
+                # Accumulated per-hand timings (summed across multi-hand frames)
+                _dt_recog = 0.0
+                _dt_action = 0.0
+                _dt_cursor = 0.0
+
                 # Handle detected hands
                 if results.multi_hand_landmarks:
                     for i, hand_landmarks in enumerate(results.multi_hand_landmarks):
                         # Gets whether the hand is Left or Right
                         hand_label = results.multi_handedness[i].classification[0].label
 
-                        # Recognize gesture
+                        # ── Stage 3: Gesture recognition ─────────────────────
+                        _ta = time.perf_counter()
                         gesture_type, metadata = self.gesture_recognizer.get_gesture(
                             hand_landmarks,
                             hand_label
                         )
+                        _dt_recog += (time.perf_counter() - _ta) * 1000
 
                         # Get hand measurements for visualization
                         thumb_pos = self.hand_tracker.get_landmark_position(
@@ -218,21 +246,28 @@ class GestureDetectionWorker(QObject):
                             1
                         )
 
-                        # Emit gesture signal
+                        # ── Stage 4: Action execution ─────────────────────────
+                        _ta = time.perf_counter()
                         if gesture_type != GestureType.NONE:
                             self.gesture_detected.emit(
                                 gesture_type.value,
                                 metadata
                             )
-
                             # Handle gesture (mouse/keyboard control)
                             self._handle_gesture(gesture_type, metadata)
+                        _dt_action += (time.perf_counter() - _ta) * 1000
 
-                        # Move cursor
+                        # ── Stage 5: Cursor move ──────────────────────────────
+                        _ta = time.perf_counter()
                         screen_w, screen_h = self.system_controller.screen_width, self.system_controller.screen_height
                         target_x = (screen_w / self.hand_tracker.frame_width) * index_pos[0]
                         target_y = (screen_h / self.hand_tracker.frame_height) * index_pos[1]
                         self.cursor_smoother.move_to(target_x, target_y)
+                        _dt_cursor += (time.perf_counter() - _ta) * 1000
+
+                self._prof["gesture_recog"].append(_dt_recog)
+                self._prof["action_exec"].append(_dt_action)
+                self._prof["cursor_move"].append(_dt_cursor)
 
                 # ── Auto-scroll cursor management (once per frame) ───────────
                 if self._auto_scroll_this_frame and not self.is_auto_scrolling:
@@ -241,6 +276,9 @@ class GestureDetectionWorker(QObject):
                 elif not self._auto_scroll_this_frame and self.is_auto_scrolling:
                     self.is_auto_scrolling = False
                     _restore_cursor()
+
+                # ── Stage 6: Frame render + HUD ───────────────────────────────
+                _ta = time.perf_counter()
 
                 # Add background bar for text readability
                 cv2.rectangle(frame_with_landmarks, (0, 0), (640, 95), (0, 0, 0), -1)
@@ -309,6 +347,16 @@ class GestureDetectionWorker(QObject):
                 # Convert frame for Qt display
                 qt_image = self._convert_cv_to_qt(frame_with_landmarks)
                 self.frame_ready.emit(qt_image)
+                self._prof["frame_render"].append((time.perf_counter() - _ta) * 1000)
+
+                # ── Total frame ───────────────────────────────────────────────
+                self._prof["total_frame"].append((time.perf_counter() - _t0) * 1000)
+
+                # Print summary table every _PROF_EVERY frames
+                self._prof_n += 1
+                if self._prof_n >= self._PROF_EVERY:
+                    self._prof_n = 0
+                    self._print_latency_table()
 
         except Exception as e:
             self.status_changed.emit(f"ERROR: {str(e)}")
@@ -316,6 +364,43 @@ class GestureDetectionWorker(QObject):
             cap.release()
             self.running = False
             self.status_changed.emit("✗ Stopped")
+
+    def _print_latency_table(self):
+        """Print formatted latency table to console every 60 frames."""
+        STAGES = [
+            ("cam_read",      "Camera read + flip   "),
+            ("mediapipe",     "MediaPipe inference  "),
+            ("gesture_recog", "Gesture recognition  "),
+            ("action_exec",   "Action execution     "),
+            ("cursor_move",   "Cursor move (EMA)    "),
+            ("frame_render",  "Frame render + emit  "),
+            ("total_frame",   "── TOTAL FRAME ──    "),
+        ]
+        lines = [
+            "",
+            "┌─────────────────────────────┬─────────┬─────────┬─────────┬─────────┐",
+            "│ Stage                       │  Avg ms │  Min ms │  Max ms │  P95 ms │",
+            "├─────────────────────────────┼─────────┼─────────┼─────────┼─────────┤",
+        ]
+        for key, label in STAGES:
+            data = list(self._prof[key])
+            if not data:
+                continue
+            avg = statistics.mean(data)
+            mn  = min(data)
+            mx  = max(data)
+            p95 = sorted(data)[max(0, int(len(data) * 0.95) - 1)]
+            lines.append(
+                f"│ {label:<27} │ {avg:>7.2f} │ {mn:>7.2f} │ {mx:>7.2f} │ {p95:>7.2f} │"
+            )
+        total = list(self._prof["total_frame"])
+        fps = 1000.0 / statistics.mean(total) if total else 0
+        lines += [
+            "└─────────────────────────────┴─────────┴─────────┴─────────┴─────────┘",
+            f"  Live FPS: {fps:.1f}",
+            "",
+        ]
+        print("\n".join(lines))
 
     def _handle_gesture(self, gesture_type, metadata):
         """
